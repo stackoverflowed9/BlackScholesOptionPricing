@@ -2,19 +2,21 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from scipy.stats import norm
+from scipy.optimize import root_scalar
+import matplotlib.pyplot as plt
 from datetime import datetime
 
 r = 0.05  # trial risk-free rate
 
-expiry = datetime(2026, 3, 13)
+expiry = datetime(2026,2,27)
 today = datetime.today()
 T = (expiry-today).days/365
 
 
-ticker = yf.Ticker("AAPL")
-
+ticker = yf.Ticker("NVDA")
+print(ticker.options)
 spot = ticker.history(period="1d")["Close"].iloc[-1]
-options = ticker.option_chain(expiry.strftime("%Y-%m-%d"))
+options = ticker.option_chain('2026-02-27')
 calls = options.calls
 puts = options.puts
 
@@ -33,18 +35,19 @@ def black_scholes_put(S0, K, vol, r, T):
     return K*np.exp(-1*r*T)*norm.cdf(-1*d2) - S0*norm.cdf(-1*d1)
 
 
-def impliedVolatility(C_market, S, K, r, T, option_type, tol=1e-3, init=0.2):
-    vol = init
-    price = tol + C_market + 1
-    while (abs(price-C_market) > tol):
-        if (option_type=="call"):
-            price = black_scholes_call(S, K, vol, r, T)
-        else :
-            price = black_scholes_put(S, K, vol, r, T)
+def impliedVolatility(C_market, S, K, r, T, option_type):
 
-        vega = S*norm.pdf((np.log(S/K)+(r+0.5*vol**2)*T)/(vol*np.sqrt(T)))*np.sqrt(T)
-        vol -= (price - C_market)/vega
-    return vol
+    def objective(vol):
+        if option_type == "call":
+            return black_scholes_call(S, K, vol, r, T) - C_market
+        else:
+            return black_scholes_put(S, K, vol, r, T) - C_market
+
+    try:
+        sol = root_scalar(objective, bracket=[1e-6, 5], method="brentq")
+        return sol.root
+    except:
+        return np.nan
 
 
 calls["iv"] = calls.apply(lambda row: impliedVolatility(row["lastPrice"],spot,row["strike"],r, T,"call"),axis=1)
@@ -57,3 +60,24 @@ print(calls[["strike", "lastPrice", "iv"]].head())
 
 print("\nPuts with IV:")
 print(puts[["strike", "lastPrice", "iv"]].head())
+
+
+calls_clean = calls[(calls["iv"].notna()) & (calls["iv"] > 0) &(calls["iv"] < 3)].copy()
+
+puts_clean = puts[(puts["iv"].notna()) & (puts["iv"] > 0) & (puts["iv"] < 3)].copy()
+
+
+plt.figure(figsize=(10,6))
+
+plt.scatter(calls_clean["strike"], calls_clean["iv"], label="Calls")
+plt.scatter(puts_clean["strike"], puts_clean["iv"], label="Puts")
+
+plt.axvline(spot, linestyle="--", label="Spot")
+
+plt.xlabel("Strike")
+plt.ylabel("Implied Volatility")
+plt.title("NVDA Volatility Smile (Expiry 2026-02-27)")
+plt.legend()
+
+plt.savefig("nvda_smile.png", dpi=300)
+plt.close()
